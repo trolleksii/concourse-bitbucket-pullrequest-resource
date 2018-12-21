@@ -1,6 +1,3 @@
-> This resource is no longer actively maintained. Please refer to a maintained fork here: https://github.com/mmb/concourse-bitbucket-pullrequest-resource. <br>
-> Any pull requests should be done on the forementioned fork. They won't be merged here!
-
 # Concourse Bitbucket Pull Request Resource
 
 Tracks pull requests made to a Bitbucket repository.
@@ -21,7 +18,7 @@ resource_types:
 - name: concourse-bitbucket-pullrequest
   type: docker-image
   source:
-    repository: laurentverbruggen/concourse-bitbucket-pullrequest-resource
+    repository: emeraldsquad/concourse-bitbucket-pullrequest-resource
 ```
 
 See [concourse docs](http://concourse.ci/configuring-resource-types.html) for more details on adding `resource_types` to a pipeline config.
@@ -129,7 +126,7 @@ resource_types:
 - name: concourse-bitbucket-pullrequest
   type: docker-image
   source:
-    repository: laurentverbruggen/concourse-bitbucket-pullrequest-resource
+    repository: emeraldsquad/concourse-bitbucket-pullrequest-resource
 
 resources:
 - name: pullrequest
@@ -137,7 +134,7 @@ resources:
   source:
     username: {{bitbucket-username}}
     password: {{bitbucket-password}}
-    uri: laurentverbruggen/concourse-bitbucket-pullrequest-resource
+    uri: https://bitbucket.exemple.net/scm/exemple-project/exemple-repo.git
 
 jobs:
 - name: test pull request
