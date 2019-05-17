@@ -38,7 +38,6 @@ only_for_branch=$(jq -r '.source.only_for_branch // "."' < "$payload")
 only_without_conflicts=$(jq -r '.source.only_without_conflicts // "true"' < "$payload")
 only_when_mergeable=$(jq -r '.source.only_when_mergeable // "false"' < "$payload")
 only_when_asked=$(jq -r '.source.only_when_asked // "false"' < "$payload")
-rebuild_when_target_changed=$(jq -r '.source.rebuild_when_target_changed // "false"' < "$payload")
 rebuild_phrase=$(jq -r '.source.rebuild_phrase // "test this please"' < "$payload")
 
 configure_git_ssl_verification "$skip_ssl_verification"
@@ -92,10 +91,8 @@ if [ -n "$pull_requests" ]; then
           text=$(echo "$comment" | jq -r '.text')
 
           # check for progress or finished messages => do not include in versions when available
-          hash="$from_hash"
-          if [ "$rebuild_when_target_changed" == "true" ]; then
-            hash="$to_hash"
-          fi
+          hash="$to_hash"
+
           if bitbucket_pullrequest_comment_commit_match "$text" "$hash"; then
             log "Skipping PRQ #$prq_number since already handled"
             skip_build=true
@@ -113,11 +110,6 @@ if [ -n "$pull_requests" ]; then
       # add prq to versions
       if [ "$skip_build" == "false" ]; then
         pretty_date=$(date_from_epoch_seconds "$(( ($prq_verify_date + 500) / 1000))")
-
-        if [ "$rebuild_when_target_changed" == "false" ]; then
-          to_hash=""
-        fi
-
         versions+=" + [{ id: \"$prq_number\", from: \"$from_hash\", to: \"$to_hash\", date: \"$pretty_date\", change: $prq_verify_date }]"
       fi
 
