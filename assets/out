@@ -36,7 +36,6 @@ configure_credentials "$payload"
 skip_ssl_verification=$(jq -r '.source.skip_ssl_verification // false' < ${payload})
 uri=$(jq -r '.source.uri // ""' < "$payload")
 git_config_payload=$(jq -r '.source.git_config // []' < "$payload")
-rebuild_when_target_changed=$(jq -r '.source.rebuild_when_target_changed // "false"' < "$payload")
 rebuild_phrase=$(jq -r '.source.rebuild_phrase // "test this please"' < "$payload")
 
 path=$(jq -r '.params.path // ""' < "$payload")
@@ -187,17 +186,11 @@ if [ -z "$commented" ]; then
   bitbucket_pullrequest_add_comment_status "$repo_host" "$repo_project" "$repo_name" "$prq_number" "$comment_message" "" "$skip_ssl_verification" >/dev/null
 fi
 
-
-to_hash=""
-if [ "$rebuild_when_target_changed" == "true" ]; then
-  to_hash="$target_commit"
-fi
-
 jq -n "{
   version: {
     id: \"$prq_number\",
     from: \"$source_commit\",
-    to: \"$to_hash\",
+    to: \"$target_commit\",
     date: \"$prq_verify_date\"
   },
   metadata: $(pullrequest_metadata "$prq_number" "$uri" "$skip_ssl_verification")

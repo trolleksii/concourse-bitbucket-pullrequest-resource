@@ -85,7 +85,7 @@ if [ -n "$pull_requests" ]; then
 
       # edit timestamp to version to force new build when rebuild_phrase is included in comments
       skip_build=false
-      comments=$(bitbucket_pullrequest_overview_comments "$repo_host" "$repo_project" "$repo_name" "$prq_number" "" "$skip_ssl_verification" | jq -c '.[]')
+      comments=$(bitbucket_pullrequest_overview_comments "$rzepo_host" "$repo_project" "$repo_name" "$prq_number" "" "$skip_ssl_verification" | jq -c '.[]')
       if [ -n "$comments" ]; then
         while read -r comment; do
           text=$(echo "$comment" | jq -r '.text')

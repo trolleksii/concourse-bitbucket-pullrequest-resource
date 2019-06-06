@@ -64,8 +64,6 @@ It will accept a regular expression as determined by [egrep](http://linuxcommand
 
 * `only_when_asked`: *Optional (default: false).* Only build pull request when explicitly asked for, using rebuild_phrase.
 
-* `rebuild_when_target_changed`: *Optional (default: false).* Rebuild pull requests when target branch changed instead of only when source branch changed.
-
 * `rebuild_phrase`: *Optional (default: test this please).* Regular expression as determined by [egrep](http://linuxcommand.org/man_pages/egrep1.html) will match all comments in pull request overview.
 If a match is found the pull request will be rebuilt.
 
