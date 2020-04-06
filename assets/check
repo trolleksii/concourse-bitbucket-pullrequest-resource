@@ -63,7 +63,7 @@ repo_host=${repo_host}$(getBasePathOfBitbucket)
 
 # collect all pull requests from uri and loop on them
 pull_requests=$(bitbucket_pullrequests "$repo_host" "$repo_project" "$repo_name" "" "$skip_ssl_verification" |
-  jq -r '.[] | [.id, .fromRef.latestCommit, .toRef.latestCommit, .toRef.displayId, .createdDate]|@tsv')
+  jq -r '.[] | [.id, .fromRef.latestCommit, .toRef.latestCommit, .toRef.displayId, .updatedDate]|@tsv')
 
 if [ -n "$pull_requests" ]; then
   while IFS=$'\t' read -r prq_number from_hash to_hash prq_to_branch prq_verify_date; do
