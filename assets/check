@@ -33,7 +33,8 @@ log "Parsing payload"
 uri=$(jq -r '.source.uri // ""' < "$payload")
 skip_ssl_verification=$(jq -r '.source.skip_ssl_verification // false' < ${payload})
 git_config_payload=$(jq -r '.source.git_config // []' < "$payload")
-
+current_version=$(jq -r '.version // ""'  < "$payload")
+current_change=$(jq -r '.version.change // 0' < "$payload")
 only_for_branch=$(jq -r '.source.only_for_branch // "."' < "$payload")
 only_without_conflicts=$(jq -r '.source.only_without_conflicts // "true"' < "$payload")
 only_when_mergeable=$(jq -r '.source.only_when_mergeable // "false"' < "$payload")
@@ -62,12 +63,24 @@ repo_host="${uri_schema}://${uri_address}"
 repo_host=${repo_host}$(getBasePathOfBitbucket)
 
 # collect all pull requests from uri and loop on them
-pull_requests=$(bitbucket_pullrequests "$repo_host" "$repo_project" "$repo_name" "" "$skip_ssl_verification" |
-  jq -r '.[] | [.id, .fromRef.latestCommit, .toRef.latestCommit, .toRef.displayId, .createdDate]|@tsv')
+pull_requests_json=$(bitbucket_pullrequests "$repo_host" "$repo_project" "$repo_name" "" "$skip_ssl_verification")
+pull_requests=$(jq -r '.[] | [.id, .fromRef.latestCommit, .toRef.latestCommit, .toRef.displayId, .updatedDate]|@tsv' <<< "$pull_requests_json")
 
 if [ -n "$pull_requests" ]; then
+  # Check if the current version is still valid
+  if [[ "$current_change" -gt 0 ]] && (jq -e --argjson version "$current_version" '.[] | select(
+    .id == (($version.id//0)|tonumber) 
+    and .fromRef.latestCommit == $version.from
+    and .toRef.latestCommit == $version.to)' > /dev/null <<< "$pull_requests_json"); then
+      versions="[$current_version]"
+  fi
+
   while IFS=$'\t' read -r prq_number from_hash to_hash prq_to_branch prq_verify_date; do
     log "Verifying pull request #${prq_number}"
+
+    if [[ "$prq_verify_date" -le "$current_change" ]]; then
+      continue
+    fi
 
     if [[ "$prq_to_branch" =~ $only_for_branch ]]; then
 
@@ -117,4 +130,4 @@ if [ -n "$pull_requests" ]; then
   done <<< "$pull_requests"
 fi
 
-jq -n "$versions | sort_by(.change) | map(del(.change))"  >&3
+jq -n "$versions | sort_by(.change)"  >&3
