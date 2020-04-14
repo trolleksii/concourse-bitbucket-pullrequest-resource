@@ -129,4 +129,4 @@ if [ -n "$pull_requests" ]; then
   done <<< "$pull_requests"
 fi
 
-jq -n "$versions | sort_by(.change)"  >&3
+jq -n "$versions | sort_by(.change) | map(.change |= (. | tostring))"  >&3
