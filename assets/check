@@ -38,7 +38,6 @@ current_change=$(jq -r '.version.change // 0' < "$payload")
 only_for_branch=$(jq -r '.source.only_for_branch // "."' < "$payload")
 only_without_conflicts=$(jq -r '.source.only_without_conflicts // "true"' < "$payload")
 only_when_mergeable=$(jq -r '.source.only_when_mergeable // "false"' < "$payload")
-only_when_asked=$(jq -r '.source.only_when_asked // "false"' < "$payload")
 rebuild_phrase=$(jq -r '.source.rebuild_phrase // "test this please"' < "$payload")
 
 configure_git_ssl_verification "$skip_ssl_verification"

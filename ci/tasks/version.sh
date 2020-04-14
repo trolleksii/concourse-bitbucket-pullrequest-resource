@@ -9,4 +9,4 @@ then
     VERSION=$(git rev-parse --short HEAD)
 fi
 
-echo $VERSION
+echo "$VERSION"
