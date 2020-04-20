@@ -233,3 +233,14 @@ bitbucket_pullrequest_update_comment_status() {
   log "Updating pull request comment (id: $6) for status on #$4 for $2/$3"
   bitbucket_request "$1" "projects/$2/repos/$3/pull-requests/$4/comments/$6" "" "{\"text\": \"$5\", \"version\": \"$7\" }" "" "$9" "$8" "PUT"
 }
+
+bitbucket_pull_request_activity() {
+  # $1: host
+  # $2: project
+  # $3: repository id
+  # $4: pullrequest id
+  # $5: netrc file (default: $HOME/.netrc)
+  # $6: skip ssl verification
+  log "Retrieving pull request activity history #$4 for $2/$3"
+  bitbucket_request "$1" "projects/$2/repos/$3/pull-requests/$4/activities" "" "" "" "$6" "$5"
+}

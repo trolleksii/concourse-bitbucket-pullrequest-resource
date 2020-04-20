@@ -63,7 +63,7 @@ repo_host=${repo_host}$(getBasePathOfBitbucket)
 
 # collect all pull requests from uri and loop on them
 pull_requests_json=$(bitbucket_pullrequests "$repo_host" "$repo_project" "$repo_name" "" "$skip_ssl_verification")
-pull_requests=$(jq -r '.[] | [.id, .fromRef.latestCommit, .toRef.latestCommit, .toRef.displayId, .updatedDate]|@tsv' <<< "$pull_requests_json")
+pull_requests=$(jq -r '.[] | [.id, .fromRef.latestCommit, .toRef.latestCommit, .toRef.displayId]|@tsv' <<< "$pull_requests_json")
 
 if [ -n "$pull_requests" ]; then
   # Check if the current version is still valid
@@ -74,10 +74,13 @@ if [ -n "$pull_requests" ]; then
       versions="[$current_version]"
   fi
 
-  while IFS=$'\t' read -r prq_number from_hash to_hash prq_to_branch prq_verify_date; do
+  while IFS=$'\t' read -r prq_number from_hash to_hash prq_to_branch; do
     log "Verifying pull request #${prq_number}"
 
-    if [[ "$prq_verify_date" -le "$current_change" ]]; then
+    last_commit_change=$(bitbucket_pull_request_activity "$repo_host" "$repo_project" "$repo_name" "$prq_number" "" "$skip_ssl_verification" \
+      | jq 'map(select(.action == "RESCOPED"))| max_by(.createdDate).createdDate')
+
+    if [[ "$last_commit_change" -le "$current_change" ]]; then
       continue
     fi
 
@@ -113,7 +116,7 @@ if [ -n "$pull_requests" ]; then
 
           # edit timestamp to force new build when rebuild_phrase is included in comments
           if echo "$text" | grep -Ec "$rebuild_phrase" > /dev/null; then
-            prq_verify_date=$(echo "$comment" | jq -r '.createdDate')
+            last_commit_change=$(echo "$comment" | jq -r '.createdDate')
             break
           fi
         done <<< "$comments"
@@ -121,8 +124,8 @@ if [ -n "$pull_requests" ]; then
 
       # add prq to versions
       if [ "$skip_build" == "false" ]; then
-        pretty_date=$(date_from_epoch_seconds "$(( ($prq_verify_date + 500) / 1000))")
-        versions+=" + [{ id: \"$prq_number\", from: \"$from_hash\", to: \"$to_hash\", date: \"$pretty_date\", change: \"$prq_verify_date\" }]"
+        pretty_date=$(date_from_epoch_seconds "$(( (last_commit_change + 500) / 1000))")
+        versions+=" + [{ id: \"$prq_number\", from: \"$from_hash\", to: \"$to_hash\", date: \"$pretty_date\", change: \"$last_commit_change\" }]"
       fi
 
     fi
