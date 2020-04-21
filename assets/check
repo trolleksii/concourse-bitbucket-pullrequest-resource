@@ -78,7 +78,9 @@ if [ -n "$pull_requests" ]; then
     log "Verifying pull request #${prq_number}"
 
     last_commit_change=$(bitbucket_pull_request_activity "$repo_host" "$repo_project" "$repo_name" "$prq_number" "" "$skip_ssl_verification" \
-      | jq 'map(select(.action == "RESCOPED"))| max_by(.createdDate).createdDate')
+      | jq 'map(select(.action == "RESCOPED" or .action == "OPENED"))| max_by(.createdDate).createdDate')
+
+    echo "====== Last commit : $last_commit_change"
 
     if [[ "$last_commit_change" -le "$current_change" ]]; then
       continue
