@@ -143,6 +143,7 @@ bitbucket_pullrequest_commit_status "$repo_host" "$source_commit" "$data" "" "" 
 
 # use the pullrequest date stored in git config in get
 prq_verify_date=$(git config --get pullrequest.date | cat)
+prq_change=$(git config --get pullrequest.change | cat)
 
 # Add branch name to additional comment
 if [ -n "$additionnal_comment" ]; then
@@ -171,7 +172,8 @@ if [ -n "$comments" ]; then
     # edit timestamp to force new build when rebuild_phrase is included in comments
     if [ "$skip_verify" != "true" ]; then
       if echo "$text" | grep -Ec "$rebuild_phrase" > /dev/null; then
-        prq_verify_date=$(date_from_epoch_seconds $(( ($(echo "$comment" | jq -r '.createdDate') + 500) / 1000)))
+        prq_change=$(( ($(echo "$comment" | jq -r '.createdDate') + 500) / 1000))
+        prq_verify_date=$(date_from_epoch_seconds "$prq_change")
         skip_verify=true
       fi
     fi
@@ -191,7 +193,8 @@ jq -n "{
     id: \"$prq_number\",
     from: \"$source_commit\",
     to: \"$target_commit\",
-    date: \"$prq_verify_date\"
+    date: \"$prq_verify_date\",
+    change: \"$prq_change\"
   },
   metadata: $(pullrequest_metadata "$prq_number" "$uri" "$skip_ssl_verification")
 }" >&3
