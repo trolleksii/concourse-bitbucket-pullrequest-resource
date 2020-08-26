@@ -159,7 +159,10 @@ git config --add pullrequest.date "$prq_date"
 git config --add pullrequest.change "$prq_change"
 git config --add pullrequest.branch "$branch"
 
-jq -n "{
-  version: $(jq '.version' < "$payload"),
-  metadata: $(pullrequest_metadata "$prq_id" "$uri" "$skip_ssl_verification")
-}" >&3
+jq -n \
+  --argjson version "$(jq '.version' < "$payload")" \
+  --argjson metadata "$(pullrequest_metadata "$prq_id" "$uri" "$skip_ssl_verification")" \
+'{
+  version: $version,
+  metadata: $metadata
+}' >&3

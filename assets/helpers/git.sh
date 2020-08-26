@@ -74,20 +74,29 @@ add_pullrequest_metadata_commit() {
   local committer_date=$(git log $filter --format=format:%ci)
   local message=$(git log $filter --format=format:%B)
 
-  local metadata=""
-  metadata+="{name: \"($1) commit\", value: \"${commit}\"},"
-  metadata+="{name: \"($1) author\", value: \"${author}\"},"
-  metadata+="{name: \"($1) author_date\", value: \"${author_date}\", type: \"time\"},"
-  metadata+=$(jq -n --arg name "($1) message" --arg value "$message" '{name: $name, value: $value, type: "message"}')
+  local metadata="$(jq -n \
+    --arg commit "$commit" \
+    --arg author "$author" \
+    --arg author_date "$author_date" \
+    --arg message "$message" \
+    '[
+        {name: ($commit + " commit"), value: $commit },
+        {name: ($commit + " author"), value: $author },
+        {name: ($commit + " author_date"), value: $author_date, type: "time" },
+        {name: ($commit + " message"), value: $message, type: "message" }
+    ]'
+  )"
 
   if [ "$author" != "$committer" ]; then
-    metadata+=",{name: \"($1) committer\", value: \"${committer}\"}"
+    metadata=$(jq --arg commit "$1" --arg value "${committer}" \
+      '. + [{name: ($commit + " committer"), value: $value }]' <<< "$metadata")
   fi
   if [ "$author_date" != "$committer_date" ]; then
-    metadata+=",{name: \"($1) committer_date\", value: \"${committer_date}\", type: \"time\"}"
+    metadata=$(jq --arg commit "$1" --arg value "${committer_date}" \
+      '. + [{name: ($commit + " committer_date"), value: $value, type: "time" }]' <<< "$metadata")
   fi
 
-  jq ". + [ $metadata ]"
+  jq --argjson metadata "$metadata" '. + $metadata'
 }
 
 pullrequest_metadata() {
