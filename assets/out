@@ -68,32 +68,25 @@ if [ -n "$additionnal_comment_file" ]; then
 fi
 
 cd "$path"
+prq_id=$(git config --get pullrequest.id | cat)
+prq_title=$(git config --get pullrequest.title | cat)
+prq_from=$(git config --get pullrequest.from | cat)
+prq_to=$(git config --get pullrequest.to | cat)
+prq_commit=$(git config --get pullrequest.commit | cat)
+prq_date=$(git config --get pullrequest.date | cat)
+prq_change=$(git config --get pullrequest.change | cat)
 
-merge_commit=$(git rev-parse HEAD)
-ls_remote=$(git ls-remote "$uri")
+ls_remote="$(git ls-remote "$uri")"
+source_commit=$(echo "$ls_remote" | grep "$prq_from" | awk '{print $1}')
+target_commit=$(echo "$ls_remote" | grep "$prq_to" | awk '{print $1}')
 
-# collect prq id and branch name from git config stored in git config (during get step)
-# included cat to catch error
-prq_number=$(git config --get pullrequest.id | cat)
-branch=$(git config --get pullrequest.branch | cat)
-
-if [ -z "$prq_number" ]; then
-  prqs=$(echo "$ls_remote" | grep -E "/pull\-requests/[0-9]+" | grep "$merge_commit" | cat)
-
-  # search for prq from commits in git ls-remote that match current commit
-  # if none match we can't return a version since we can't determine the correct prq
-  prq_number=$(echo "$prqs" | sed -E "s/^.*\/pull-requests\/([0-9]+)\/.*$/\\1/")
-fi
-
-if [ -z "$prq_number" ]; then
-  log "Can't determine pull request id for commit $merge_commit"
+if [ -z "$prq_id" ]; then
+  log "Can't determine pull request id for commit $prq_commit"
   exit 1
 fi
 
-prq_hash=$(echo "$ls_remote" | grep -E "/pull\-requests/${prq_number}/from" | awk '{print $1}')
-
-if [ -z "$prq_hash" ]; then
-  log "Failed to determine pull request hash from id $prq_number in \n$ls_remote"
+if [ -z "$source_commit" ]; then
+  log "Failed to determine pull request hash from id $prq_id in \n$ls_remote"
   exit 1
 fi
 
@@ -112,9 +105,6 @@ case "$status" in
     exit 1
 esac
 
-# set build status on commit in bitbucket, this has to be the latest source commit or the pull request won't pick it up
-source_commit=$(git rev-list --parents -1 $merge_commit | awk '{print $3}')
-target_commit=$(git rev-list --parents -1 $merge_commit | awk '{print $2}')
 
 # determine repository name for calling REST api
 repo_name=$(basename "$uri" | sed "s/.git$//")
@@ -122,13 +112,12 @@ repo_project=$(basename $(dirname "$uri"))
 
 # parse uri and retrieve host
 uri_parser "$uri"
-repo_host="${uri_schema}://${uri_address}"$(getBasePathOfBitbucket)
+repo_host="${uri_schema}://${uri_address}"
 
-# include ATC_EXTERNAL_URL in build status key, different sources should have different builds
-build_key="$BUILD_TEAM_NAME-$BUILD_PIPELINE_NAME-$BUILD_JOB_NAME-$ATC_EXTERNAL_URL"
+build_key="$BUILD_TEAM_NAME-$BUILD_PIPELINE_NAME-$BUILD_JOB_NAME"
 build_name="Concourse $BUILD_TEAM_NAME: $BUILD_PIPELINE_NAME - $BUILD_JOB_NAME - #$BUILD_NAME"
 build_url="$ATC_EXTERNAL_URL/teams/$BUILD_TEAM_NAME/pipelines/$BUILD_PIPELINE_NAME/jobs/$BUILD_JOB_NAME/builds/$BUILD_NAME"
-build_description="Concourse build for PRQ #$prq_number @ $ATC_EXTERNAL_URL"
+build_description="Concourse build for PRQ #$prq_id @ $ATC_EXTERNAL_URL"
 
 data=$(jq -cn "{
   state: \"$build_state\",
@@ -139,62 +128,46 @@ data=$(jq -cn "{
 }")
 
 # set commit build status for source commit
-bitbucket_pullrequest_commit_status "$repo_host" "$source_commit" "$data" "" "" "$skip_ssl_verification"
-
-# use the pullrequest date stored in git config in get
-prq_verify_date=$(git config --get pullrequest.date | cat)
-prq_change=$(git config --get pullrequest.change | cat)
+bitbucket_pullrequest_commit_status "$repo_host" "$repo_project" "$repo_name" "$source_commit" "$data" "" "$skip_ssl_verification" > /dev/null
 
 # Add branch name to additional comment
 if [ -n "$additionnal_comment" ]; then
-  additionnal_comment="${additionnal_comment//\[\[BRANCH\]\]/$branch}"
+  additionnal_comment="${additionnal_comment//\[\[BRANCH\]\]/$prq_from}"
 fi
 
 # add comment to pull request to track if build was started/finished
-comment_message=$(bitbucket_pullrequest_progress_comment "$status" "$prq_hash" "$source_commit" "$target_commit", "$additionnal_comment")
-comments=$(bitbucket_pullrequest_overview_comments "$repo_host" "$repo_project" "$repo_name" "$prq_number" "" "$skip_ssl_verification" | jq -c '.[]')
+comment_message=$(bitbucket_pullrequest_progress_comment "$status" "$source_commit" "$target_commit" "$additionnal_comment")
+comments=$(bitbucket_pullrequest_overview_comments "$repo_host" "$repo_project" "$repo_name" "$prq_id" "" "$skip_ssl_verification" | jq -c '.[]')
 commented=""
-skip_verify=false
 if [ -n "$comments" ]; then
   while read -r comment; do
     id=$(echo "$comment" | jq -r '.id')
     text=$(echo "$comment" | jq -r '.text')
-    version=$(echo "$comment" | jq -r '.version')
 
     # check for progress messages => if pull request number matches then edit comment (instead of creating a new one)
     if [ -z "$commented" ]; then
-      if bitbucket_pullrequest_progress_commit_match "$text" "$prq_hash" "Started"; then
-        bitbucket_pullrequest_update_comment_status "$repo_host" "$repo_project" "$repo_name" "$prq_number" "$comment_message" "$id" "$version" "" "$skip_ssl_verification" >/dev/null
+      if bitbucket_pullrequest_progress_commit_match "$text" "$source_commit" "Started"; then
+        bitbucket_pullrequest_update_comment_status "$repo_host" "$repo_project" "$repo_name" "$prq_id" "$comment_message" "$id" "" "$skip_ssl_verification" >/dev/null
         commented=true
+        break
       fi
-    fi
-
-    # edit timestamp to force new build when rebuild_phrase is included in comments
-    if [ "$skip_verify" != "true" ]; then
-      if echo "$text" | grep -Ec "$rebuild_phrase" > /dev/null; then
-        prq_change=$(( ($(echo "$comment" | jq -r '.createdDate') + 500) / 1000))
-        prq_verify_date=$(date_from_epoch_seconds "$prq_change")
-        skip_verify=true
-      fi
-    fi
-
-    if [ "$skip_verify" == "true" -a "$commented" == "true" ]; then
-      break
     fi
   done <<< "$comments"
 fi
 
 if [ -z "$commented" ]; then
-  bitbucket_pullrequest_add_comment_status "$repo_host" "$repo_project" "$repo_name" "$prq_number" "$comment_message" "" "$skip_ssl_verification" >/dev/null
+  bitbucket_pullrequest_add_comment_status "$repo_host" "$repo_project" "$repo_name" "$prq_id" "$comment_message" "" "$skip_ssl_verification" >/dev/null
 fi
 
 jq -n "{
   version: {
-    id: \"$prq_number\",
-    from: \"$source_commit\",
-    to: \"$target_commit\",
-    date: \"$prq_verify_date\",
+    id: \"$prq_id\",
+    title: \"$prq_title\",
+    commit: \"$prq_commit\",
+    from: \"$prq_from\",
+    to: \"$prq_to\",
+    date: \"$prq_date\",
     change: \"$prq_change\"
   },
-  metadata: $(pullrequest_metadata "$prq_number" "$uri" "$skip_ssl_verification")
+  metadata: $(pullrequest_metadata "$prq_id" "$uri" "$skip_ssl_verification")
 }" >&3

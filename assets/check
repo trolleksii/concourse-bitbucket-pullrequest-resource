@@ -34,10 +34,9 @@ uri=$(jq -r '.source.uri // ""' < "$payload")
 skip_ssl_verification=$(jq -r '.source.skip_ssl_verification // false' < ${payload})
 git_config_payload=$(jq -r '.source.git_config // []' < "$payload")
 current_version=$(jq -r '.version // ""'  < "$payload")
-current_change=$(jq -r '.version.change // 0' < "$payload")
+current_version_timestamp=$(jq -r '.version.change // 0' < "$payload")
 only_for_branch=$(jq -r '.source.only_for_branch // "."' < "$payload")
 only_without_conflicts=$(jq -r '.source.only_without_conflicts // "true"' < "$payload")
-only_when_mergeable=$(jq -r '.source.only_when_mergeable // "false"' < "$payload")
 rebuild_phrase=$(jq -r '.source.rebuild_phrase // "test this please"' < "$payload")
 
 configure_git_ssl_verification "$skip_ssl_verification"
@@ -59,77 +58,44 @@ repo_project=$(basename $(dirname "$uri"))
 uri_parser "$uri"
 repo_host="${uri_schema}://${uri_address}"
 
-repo_host=${repo_host}$(getBasePathOfBitbucket)
-
-# collect all pull requests from uri and loop on them
+# collect all open pull requests
 pull_requests_json=$(bitbucket_pullrequests "$repo_host" "$repo_project" "$repo_name" "" "$skip_ssl_verification")
-pull_requests=$(jq -r '.[] | [.id, .fromRef.latestCommit, .toRef.latestCommit, .toRef.displayId]|@tsv' <<< "$pull_requests_json")
-
+pull_requests="$(echo $pull_requests_json | jq -r '.[] | [.id, .title, .source.commit.hash, .source.branch.name, .destination.branch.name]|@tsv')"
 if [ -n "$pull_requests" ]; then
   # Check if the current version is still valid
-  if [[ "$current_change" -gt 0 ]] && (jq -e --argjson version "$current_version" '.[] | select(
-    .id == (($version.id//0)|tonumber) 
-    and .fromRef.latestCommit == $version.from
-    and .toRef.latestCommit == $version.to)' > /dev/null <<< "$pull_requests_json"); then
+  if [[ "$current_version_timestamp" -gt 0 ]] && (jq -e --argjson version "$current_version" '.[] | select(.id == ($version.id//0|tonumber) and .source.commit.hash == $version.commit)' > /dev/null <<< "$pull_requests_json");
+  then
       versions="[$current_version]"
   fi
 
-  while IFS=$'\t' read -r prq_number from_hash to_hash prq_to_branch; do
+  # for each pr in the list
+  while IFS=$'\t' read -r prq_number prq_title prq_commit prq_from prq_to; do
     log "Verifying pull request #${prq_number}"
-
-    last_commit_change=$(bitbucket_pull_request_activity "$repo_host" "$repo_project" "$repo_name" "$prq_number" "" "$skip_ssl_verification" \
-      | jq 'map(select(.action == "RESCOPED" or .action == "OPENED"))| max_by(.createdDate).createdDate')
-
-    echo "====== Last commit : $last_commit_change"
-
-    if [[ "$last_commit_change" -le "$current_change" ]]; then
+    # Select all updates or comments with rebuild phrase, and pick last date
+    last_commit_change_date=$(bitbucket_pull_request_activity "$repo_host" "$repo_project" "$repo_name" "$prq_number" "" "$skip_ssl_verification" \
+      | jq -r "[map(select(.update.state == \"OPEN\" or .comment.content.raw == \"$rebuild_phrase\")) | .[] | {date: (.update.date//.comment.updated_on)}] | max_by(.date).date")
+    # simpler version - select all updates and pick last one
+    #  | jq -r 'map(select(.update.state == "OPEN"))| max_by(.update.date).update.date')
+    timestamp=$(date -d "$last_commit_change_date" +%s)
+    pretty_date=$(date -d $last_commit_change_date)
+    echo "====== PR #$prq_number. Last commit timestamp: $timestamp"
+    # if the timestamp is less than current version, ignore it
+    if [[ "$timestamp" -le "$current_version_timestamp" ]]; then
       continue
     fi
 
-    if [[ "$prq_to_branch" =~ $only_for_branch ]]; then
-
-      if [ "$only_when_mergeable" == "true" -o "$only_without_conflicts" == "true" ]; then
-        prq_merge=$(bitbucket_pullrequest_merge "$repo_host" "$repo_project" "$repo_name" "$prq_number" "" "$skip_ssl_verification")
-
-        # verify if prq has merge conflicts
-        conflicted=$(echo "$prq_merge" | jq -r '.conflicted')
-        if [ "$conflicted" == "true" -a "$only_without_conflicts" == "true" ]; then continue; fi
-
-        # verify if prq is mergeable (e.g. enough approvals, tasks done, ...)
-        mergeable=$(echo "$prq_merge" | jq -r '.canMerge')
-        if [ "$mergeable" == "false" -a "$only_when_mergeable" == "true" ]; then continue; fi
-      fi
-
-      # edit timestamp to version to force new build when rebuild_phrase is included in comments
-      skip_build=false
-      comments=$(bitbucket_pullrequest_overview_comments "$repo_host" "$repo_project" "$repo_name" "$prq_number" "" "$skip_ssl_verification" | jq -c '.[]')
-      if [ -n "$comments" ]; then
-        while read -r comment; do
-          text=$(echo "$comment" | jq -r '.text')
-
-          # check for progress or finished messages => do not include in versions when available
-          hash="$to_hash"
-
-          if bitbucket_pullrequest_comment_commit_match "$text" "$hash"; then
-            log "Skipping PRQ #$prq_number since already handled"
-            skip_build=true
-            break
+    if [[ "$prq_to" =~ $only_for_branch ]]; then
+      if [ "$only_without_conflictts" == "true" ]; then
+        pr_diff=$(bitbucket_pullrequest_diff "$repo_host" "$repo_project" "$repo_name" "${prq_commit:0:6}" "${to_hash:0:6}" "" "$skip_ssl_verification")
+        if [ "$only_without_conflicts" == "true" ]; then
+          # detect conflicts by presence of the specific characters
+          if grep -q "<<<<<<<" <<< "$pr_diff"; then
+            continue;
           fi
-
-          # edit timestamp to force new build when rebuild_phrase is included in comments
-          if echo "$text" | grep -Ec "$rebuild_phrase" > /dev/null; then
-            last_commit_change=$(echo "$comment" | jq -r '.createdDate')
-            break
-          fi
-        done <<< "$comments"
+        fi
       fi
 
-      # add prq to versions
-      if [ "$skip_build" == "false" ]; then
-        pretty_date=$(date_from_epoch_seconds "$(( (last_commit_change + 500) / 1000))")
-        versions+=" + [{ id: \"$prq_number\", from: \"$from_hash\", to: \"$to_hash\", date: \"$pretty_date\", change: \"$last_commit_change\" }]"
-      fi
-
+      versions+=" + [{ id: \"$prq_number\", title: \"$prq_title\", commit: \"$prq_commit\", from: \"$prq_from\", to: \"$prq_to\", date: \"$pretty_date\", change: \"$timestamp\" }]"
     fi
   done <<< "$pull_requests"
 fi

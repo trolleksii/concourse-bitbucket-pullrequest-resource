@@ -35,16 +35,8 @@ configure_git_ssl_verification() {
 add_pullrequest_metadata_basic() {
   # $1: pull request number
   # $2: pull request repository
-  # $3: skip ssl verification
-  local repo_name=$(basename "$2" | sed "s/.git$//")
-  local repo_project=$(basename $(dirname "$2"))
-
-  # parse uri and retrieve host
-  uri_parser "$2"
-  local repo_host="${uri_schema}://${uri_address}"$(getBasePathOfBitbucket)
-
-  local title=$(set -o pipefail; bitbucket_pullrequest "$repo_host" "$repo_project" "$repo_name" "$1" "" "$3" | jq -r '.title')
-  local commit=$(git rev-parse HEAD)
+  local title=$(git config --get pullrequest.title)
+  local commit=$(git config --get pullrequest.commit)
   local author=$(git log -1 --format=format:%an)
 
   jq \
@@ -102,13 +94,12 @@ add_pullrequest_metadata_commit() {
 pullrequest_metadata() {
   # $1: pull request number
   # $2: pull request repository
-  # $3: skip ssl verification
 
   local source_commit=$(git rev-list --parents -1 $(git rev-parse HEAD) | awk '{print $3}')
   local target_commit=$(git rev-list --parents -1 $(git rev-parse HEAD) | awk '{print $2}')
 
   jq -n "[]" | \
-    add_pullrequest_metadata_basic "$1" "$2" "$3" | \
+    add_pullrequest_metadata_basic "$1" "$2" | \
     add_pullrequest_metadata_commit "source" "$source_commit" | \
     add_pullrequest_metadata_commit "target" "$target_commit"
 }
@@ -116,15 +107,9 @@ pullrequest_metadata() {
 configure_credentials() {
   local username=$(jq -r '.source.username // ""' < $1)
   local password=$(jq -r '.source.password // ""' < $1)
-  local token=$(jq -r '.source.token // ""' < $1)
 
   rm -f $HOME/.netrc
   if [ "$username" != "" -a "$password" != "" ]; then
     echo "default login $username password $password" > $HOME/.netrc
-  fi
-
-  if [ "$token" != "" ]; then
-    git config --global --add http.extraHeader "Authorization: Bearer $token"
-    TOKEN="-H \"Authorization: Bearer $token\""
   fi
 }

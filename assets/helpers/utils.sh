@@ -118,12 +118,6 @@ uri_parser() {
     return 0
 }
 
-date_from_epoch_seconds() {
-  # Mac OS X:
-  #date -r $1
-  date -d @$1
-}
-
 # http://stackoverflow.com/questions/296536/how-to-urlencode-data-for-curl-command
 rawurlencode() {
   local string="${1}"
@@ -147,18 +141,3 @@ regex_escape() {
   echo "$1" | sed 's/[^^]/[&]/g; s/\^/\\^/g'
 }
 
-getBasePathOfBitbucket() {
-  # get base path in case bitbucket does not run on /
-
-  local base_path=""
-  for i in "${!uri_parts[@]}"
-  do
-    if [ ${uri_parts[$i]} = "scm" ]; then
-      break
-    fi
-
-    base_path=$base_path"/"${uri_parts[$i]}
-  done
-
-  echo ${base_path}
-}

@@ -17,13 +17,14 @@ bitbucket_request() {
   # $7: netrc file (default: $HOME/.netrc)
   # $8: HTTP method (default: POST for data, GET without data)
   # $9: recursive data for bitbucket paging
-
+  # $10: expect plain text response
   local data="$4"
-  local path=${5:-rest/api/1.0}
+  local path=${5:-api/2.0}
   local skip_ssl_verification=${6:-"false"}
   local netrc_file=${7:-$HOME/.netrc}
   local method="$8"
   local recursive=${9:-limit=${VALUES_LIMIT}}
+  local expect_plain_text=${10:-"false"}
 
   local request_url="${1}/${path}/${2}?${recursive}&${3}"
   local request_result=$(tmp_file_unique bitbucket-request)
@@ -59,6 +60,11 @@ bitbucket_request() {
     exit 1
   fi
 
+  if [ "$expect_plain_text" = "true" ]; then
+    cat $request_result
+    return
+  fi
+
   if ! jq -c '.' < "$request_result" > /dev/null 2> /dev/null; then
     log "Bitbucket request $request_url failed (invalid JSON): $(cat "$request_result")"
     exit 1
@@ -70,7 +76,7 @@ bitbucket_request() {
     jq -c '.values' < "$request_result" | jq -c ". + $nextResult"
   elif [ "$(jq -c '.values' < "$request_result")" != "null" ]; then
     jq -c '.values' < "$request_result"
-  elif [ "$(jq -c '.errors' < "$request_result")" == "null" ]; then
+  elif [ "$(jq -c '.error' < "$request_result")" == "null" ]; then
     jq '.' < "$request_result"
   elif [ "${request_result/NoSuchPullRequestException}" = "${request_result}" ]; then
     printf "ERROR"
@@ -92,7 +98,7 @@ bitbucket_pullrequest() {
   # $5: netrc file (default: $HOME/.netrc)
   # $6: skip ssl verification
   log "Retrieving pull request #$4 for $2/$3"
-  bitbucket_request "$1" "projects/$2/repos/$3/pull-requests/$4" "" "" "" "$6" "$5"
+  bitbucket_request "$1" "repositories/$2/$3/pullrequests/$4" "" "" "" "$6" "$5"
 }
 
 bitbucket_pullrequests() {
@@ -102,18 +108,19 @@ bitbucket_pullrequests() {
   # $4: netrc file (default: $HOME/.netrc)
   # $5: skip ssl verification
   log "Retrieving all open pull requests for $2/$3"
-  bitbucket_request "$1" "projects/$2/repos/$3/pull-requests" "" "" "" "$5" "$4"
+  bitbucket_request "$1" "repositories/$2/$3/pullrequests" "" "" "" "$5" "$4"
 }
 
-bitbucket_pullrequest_merge() {
+bitbucket_pullrequest_diff() {
   # $1: host
   # $2: project
   # $3: repository id
-  # $4: pullrequest id
-  # $5: netrc file (default: $HOME/.netrc)
-  # $6: skip ssl verification
-  log "Retrieving pull request merge status #$4 for $2/$3"
-  bitbucket_request "$1" "projects/$2/repos/$3/pull-requests/$4/merge" "" "" "" "$6" "$5"
+  # $4: from sha
+  # $5: to sha
+  # $6: netrc file (default: $HOME/.netrc)
+  # $7: skip ssl verification
+  log "Retrieving pull request diff status for $2/$3"
+  bitbucket_request "$1" "repositories/$2/$3/diff/$4..$5" "" "" "" "$7" "$6" "" "" "true"
 }
 
 bitbucket_pullrequest_overview_comments() {
@@ -125,10 +132,8 @@ bitbucket_pullrequest_overview_comments() {
   # $6: skip ssl verification
 
   log "Retrieving pull request comments #$4 for $2/$3"
-  set -o pipefail; bitbucket_request "$1" "projects/$2/repos/$3/pull-requests/$4/activities" "" "" "" "$6" "$5" | \
-    jq 'map(select(.action == "COMMENTED" and .commentAction == "ADDED" and .commentAnchor == null)) |
-        sort_by(.createdDate) | reverse |
-        map({ id: .comment.id, version: .comment.version, text: .comment.text, createdDate: .comment.createdDate })'
+  set -o pipefail; bitbucket_request "$1" "repositories/$2/$3/pullrequests/$4/comments" "" "" "" "$6" "$5" | \
+    jq 'map(select(.deleted == false)) | sort_by(.created_on) | reverse | map({ id: .id, text: .content.raw, createdDate: .created_on })'
 }
 
 bitbucket_pullrequest_progress_msg_start() {
@@ -138,7 +143,7 @@ bitbucket_pullrequest_progress_msg_start() {
   local type="$2"
 
   local build_url_job="$ATC_EXTERNAL_URL/teams/$(rawurlencode "$BUILD_TEAM_NAME")/pipelines/$(rawurlencode "$BUILD_PIPELINE_NAME")/jobs/$(rawurlencode "$BUILD_JOB_NAME")"
-  echo "[*Build$type* at **[${BUILD_PIPELINE_NAME} > ${BUILD_JOB_NAME}]($build_url_job)** for $hash"
+  echo "**Build$type** at **[${BUILD_PIPELINE_NAME} > ${BUILD_JOB_NAME}]($build_url_job)** for $hash"
 }
 
 bitbucket_pullrequest_progress_commit_match() {
@@ -165,22 +170,16 @@ bitbucket_pullrequest_comment_commit_match() {
 
 bitbucket_pullrequest_progress_comment() {
   # $1: status (success, failure or pending)
-  # $2: hash of merge commit
-  # $3: hash of source commit
-  # $4: hash of target commit
-  # $5: custom comment
-  local hash="$2"
+  # $2: hash of source commit
+  # $3: hash of target commit
+  # $4: custom comment
 
   local progress_msg_end=""
   local custom_comment=""
 
-  if [ "$hash" == "$3" ]; then
-    progress_msg_end+=" into $4]"
-  else
-    progress_msg_end="] $3 into $4"
-  fi
+  progress_msg_end="$2 into $3"
 
-  if [ -n "$5" ]; then
+  if [ -n "$4" ]; then
     custom_comment="\n\n$5"
   fi
 
@@ -194,18 +193,20 @@ bitbucket_pullrequest_progress_comment() {
     failure)
       echo "$(bitbucket_pullrequest_progress_msg_start "$hash" "Finished")${progress_msg_end}${build_result_pre}✕ BUILD FAILED${build_result_post}${custom_comment}" ;;
     pending)
-      echo "$(bitbucket_pullrequest_progress_msg_start "$hash" "Started")${progress_msg_end}${build_result_pre}&#8987; BUILD IN PROGRESS${build_result_post}${custom_comment}" ;;
+      echo "$(bitbucket_pullrequest_progress_msg_start "$hash" "Started")${progress_msg_end}${build_result_pre}⏳ BUILD IN PROGRESS${build_result_post}${custom_comment}" ;;
   esac
 }
 
 bitbucket_pullrequest_commit_status() {
   # $1: host
-  # $2: commit
-  # $3: data
-  # $5: netrc file (default: $HOME/.netrc)
-  # $6: skip ssl verification
-  log "Setting pull request status $2"
-  bitbucket_request "$1" "commits/$2" "" "$3" "rest/build-status/1.0" "$6" "$5"
+  # $2: project
+  # $3: repository id
+  # $4: commit
+  # $5: data
+  # $6: netrc file (default: $HOME/.netrc)
+  # $7: skip ssl verification
+  log "Setting pull request status $2/$3"
+  bitbucket_request "$1" "repositories/$2/$3/commit/$4/statuses/build" "" "$5" "" "$7" "$6"
 }
 
 bitbucket_pullrequest_add_comment_status() {
@@ -217,7 +218,7 @@ bitbucket_pullrequest_add_comment_status() {
   # $6: netrc file (default: $HOME/.netrc)
   # $7: skip ssl verification
   log "Adding pull request comment for status on #$4 for $2/$3"
-  bitbucket_request "$1" "projects/$2/repos/$3/pull-requests/$4/comments" "" "{\"text\": \"$5\" }" "" "$7" "$6"
+  bitbucket_request "$1" "repositories/$2/$3/pullrequests/$4/comments" "" "{\"content\":{\"raw\":\"$5\"}}" "" "$7" "$6"
 }
 
 bitbucket_pullrequest_update_comment_status() {
@@ -225,13 +226,12 @@ bitbucket_pullrequest_update_comment_status() {
   # $2: project
   # $3: repository id
   # $4: pullrequest id
-  # $5: comment
+  # $5: commentUpdating pull request comment (id: 180116834) for status on #5 for trolleksii/gitops
   # $6: comment id
-  # $7: comment version
-  # $8: netrc file (default: $HOME/.netrc)
-  # $9: skip ssl verification
+  # $7: netrc file (default: $HOME/.netrc)
+  # $8: skip ssl verification
   log "Updating pull request comment (id: $6) for status on #$4 for $2/$3"
-  bitbucket_request "$1" "projects/$2/repos/$3/pull-requests/$4/comments/$6" "" "{\"text\": \"$5\", \"version\": \"$7\" }" "" "$9" "$8" "PUT"
+  bitbucket_request "$1" "repositories/$2/$3/pullrequests/$4/comments/$6" "" "{\"content\":{\"raw\":\"$5\"}}" "" "$8" "$7" "PUT"
 }
 
 bitbucket_pull_request_activity() {
@@ -242,5 +242,5 @@ bitbucket_pull_request_activity() {
   # $5: netrc file (default: $HOME/.netrc)
   # $6: skip ssl verification
   log "Retrieving pull request activity history #$4 for $2/$3"
-  bitbucket_request "$1" "projects/$2/repos/$3/pull-requests/$4/activities" "" "" "" "$6" "$5"
+  bitbucket_request "$1" "repositories/$2/$3/pullrequests/$4/activity" "" "" "" "$6" "$5"
 }
